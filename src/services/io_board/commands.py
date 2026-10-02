@@ -15,7 +15,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 from exceptions import DeviceError, ErrorCode, ProtocolError, ValidationError
 from core.logging_config import PerformanceLogger, get_logger
 from services.io_board.protocol import build_request, parse_response
-from services.io_board.sanitizer import sanitize_loadcells
+from services.io_board.sanitizer import reset_sanitizer, sanitize_loadcells
 from services.io_board.serial_io import fetch
 from services.io_board.io_types import (
     CommandType,
@@ -173,6 +173,7 @@ async def calibrate() -> None:
             ManagementSubcommand.CALIBRATE,
             {}
         )
+        reset_loadcell_processing()
         logger.info("Loadcells calibrated")
 
 
@@ -293,6 +294,15 @@ def configure_loadcell_throttle(min_gap: float) -> None:
     )
 
 
+def reset_loadcell_processing() -> None:
+    """보정 이후 이전 판독값과 throttle cache를 폐기한다."""
+    global _loadcell_cache, _loadcell_cache_ts
+    _loadcell_cache = None
+    _loadcell_cache_ts = 0.0
+    reset_sanitizer()
+    logger.info("Loadcell sanitizer state and throttle cache reset after calibration")
+
+
 async def get_loadcells() -> List[str]:
     """현재 loadcell 무게 판독값을 조회한다.
 
@@ -326,7 +336,13 @@ async def get_loadcells() -> List[str]:
                 RequestSubcommand.LOADCELL_WEIGHTS,
                 {}
             )
-            result = sanitize_loadcells(list(response.DATA.LOADCELLS))
+            device_values = list(response.DATA.LOADCELLS)
+            result = sanitize_loadcells(device_values)
+            if result != device_values:
+                logger.info(
+                    "Loadcell sanitizer corrected frame: "
+                    f"device_values={device_values} sanitized_values={result}"
+                )
             _loadcell_cache = list(result)
             _loadcell_cache_ts = time.monotonic()
             logger.debug(f"Loadcell values retrieved: {result}")
